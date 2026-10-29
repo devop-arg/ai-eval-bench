@@ -1,0 +1,23 @@
+{
+  "clinic": "Consultorio Regina Salud (demo)",
+  "now": "2026-11-02T10:00:00-03:00",
+  "now_weekday": "lunes",
+  "timezone": "America/Argentina/Buenos_Aires",
+  "specialties": {
+    "clinica": "Clínica médica",
+    "pediatria": "Pediatría",
+    "cardiologia": "Cardiología",
+    "dermatologia": "Dermatología",
+    "ginecologia": "Ginecología",
+    "traumatologia": "Traumatología",
+    "oftalmologia": "Oftalmología"
+  },
+  "hours": {
+    "weekdays": { "morning": "08:00-12:00", "afternoon": "14:00-20:00" },
+    "saturday": { "morning": "08:00-13:00" },
+    "sunday": "closed"
+  },
+  "closed_dates": ["2026-11-23", "2026-12-08", "2026-12-25"],
+  "booking_code_format": "RS-#### (cuatro dígitos)",
+  "date_format_note": "Los pacientes escriben fechas numéricas como día/mes (5/11 es el 5 de noviembre)."
+}
