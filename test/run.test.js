@@ -1,14 +1,20 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import {
   assertPricing,
   estimateRunCost,
+  loadLocalEnv,
   missingConnectionEnv,
   parseArgs,
   resolveModels,
 } from "../src/run.js";
-import { API_KEY_ENV, BASE_URL_ENV } from "../src/providers/openai-compat.js";
+import { API_KEY_ENV, API_KEY_FILE_ENV, BASE_URL_ENV } from "../src/providers/openai-compat.js";
+
+const tempDir = () => mkdtempSync(path.join(os.tmpdir(), "ai-eval-bench-env-"));
 
 const config = {
   models: {
@@ -88,6 +94,67 @@ test("run: priced models need LLM_BASE_URL and LLM_API_KEY before any request", 
 
   const baselines = resolveModels({ models: "rules" }, config);
   assert.deepEqual(missingConnectionEnv(baselines, {}), [], "free baselines need no connection");
+});
+
+test("run: a key file satisfies the connection pre-flight without being read", () => {
+  const dir = tempDir();
+  try {
+    const keyFile = path.join(dir, "key.txt");
+    // Deliberately not parseable: the pre-flight only checks the variable and
+    // that the file exists, it never opens it.
+    writeFileSync(keyFile, "not valid json {\n");
+    const priced = resolveModels({ models: "priced" }, config);
+
+    assert.deepEqual(
+      missingConnectionEnv(priced, { [BASE_URL_ENV]: "https://x.test", [API_KEY_FILE_ENV]: keyFile }),
+      [],
+      "LLM_API_KEY_FILE pointing at an existing file is enough",
+    );
+    assert.deepEqual(
+      missingConnectionEnv(priced, {
+        [BASE_URL_ENV]: "https://x.test",
+        [API_KEY_FILE_ENV]: path.join(dir, "absent.txt"),
+      }),
+      [API_KEY_FILE_ENV],
+      "a path that does not exist is reported against the file variable",
+    );
+    assert.deepEqual(
+      missingConnectionEnv(priced, { [BASE_URL_ENV]: "https://x.test", [API_KEY_ENV]: "k" }),
+      [],
+      "LLM_API_KEY still satisfies the check on its own",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("run: .env.local fills gaps but never overrides the environment", () => {
+  const dir = tempDir();
+  const file = path.join(dir, ".env.local");
+  const addedName = "AI_EVAL_BENCH_TEST_FROM_FILE";
+  const saved = { ...process.env };
+  try {
+    writeFileSync(file, `${BASE_URL_ENV}=https://from-file.test\n${addedName}=from-file\n`);
+
+    process.env[BASE_URL_ENV] = "https://from-env.test";
+    delete process.env[addedName];
+
+    const result = loadLocalEnv({ file });
+    assert.equal(result.loaded, true);
+    assert.equal(process.env[BASE_URL_ENV], "https://from-env.test", "the environment wins");
+    assert.equal(process.env[addedName], "from-file", "missing variables are filled from the file");
+    assert.ok(result.added.includes(addedName));
+    assert.ok(!result.added.includes(BASE_URL_ENV), "existing variables are not reported as added");
+
+    const absent = loadLocalEnv({ file: path.join(dir, "absent.env.local") });
+    assert.equal(absent.loaded, false, "an absent file is not an error");
+  } finally {
+    for (const name of Object.keys(process.env)) {
+      if (!(name in saved)) delete process.env[name];
+    }
+    Object.assign(process.env, saved);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("run: CLI defaults and validation", () => {

@@ -8,8 +8,11 @@
  *   [--allow-unpriced] [--out results/runs] [--baseline-kind oracle|null]
  *   [--write-baseline]`
  *
- * Priced models read LLM_BASE_URL and LLM_API_KEY from the environment (and
- * LLM_MODEL as an optional model-id override). Nothing is written to disk.
+ * Priced models read LLM_BASE_URL and a bearer token from the environment:
+ * LLM_API_KEY, or LLM_API_KEY_FILE (plus optional LLM_API_KEY_JSON_PATH) for a
+ * key kept in a file. LLM_MODEL is an optional model-id override. Nothing is
+ * written to disk. A `.env.local` at the repo root fills gaps at startup without
+ * overriding variables already exported in the shell.
  *
  * Exit codes: 0 ok, 2 usage/pricing/configuration error, 3 prompt changed on
  * replay, 4 pre-run estimate above --max-usd or above the monthly cap.
@@ -33,7 +36,7 @@ import { gradeRow } from "./grade.js";
 import { budgetRefusalMessage, checkMonthlyBudget } from "./ledger.js";
 import { computeMetrics, round } from "./metrics.js";
 import { callModel } from "./providers/index.js";
-import { missingEnv, resolveModelId } from "./providers/openai-compat.js";
+import { API_KEY_FILE_ENV, missingEnv, resolveModelId } from "./providers/openai-compat.js";
 import {
   ROOT_DIR,
   datasetHash,
@@ -45,6 +48,32 @@ import {
 const ROOT = ROOT_DIR;
 const CONFIG_PATH = path.join(ROOT, "bench.config.json");
 const DEFAULT_OUT = path.join(ROOT, "results", "runs");
+
+export const LOCAL_ENV_FILE = ".env.local";
+
+/**
+ * Loads `<repo>/.env.local` when it exists. Variables already present in the
+ * environment win — an exported key is never silently replaced — so the file
+ * only fills the gaps. It is gitignored (`.env.*`).
+ *
+ * @param {{file?: string}} [options]
+ * @returns {{loaded: boolean, added: string[], file: string}}
+ */
+export function loadLocalEnv({ file = path.join(ROOT, LOCAL_ENV_FILE) } = {}) {
+  if (!existsSync(file)) return { loaded: false, added: [], file };
+
+  const before = { ...process.env };
+  process.loadEnvFile(file);
+  // `process.loadEnvFile` writes into process.env; restore anything that was
+  // already exported so the environment keeps precedence regardless of Node's
+  // overwrite semantics.
+  for (const [name, value] of Object.entries(before)) {
+    if (process.env[name] !== value) process.env[name] = value;
+  }
+
+  const added = Object.keys(process.env).filter((name) => !(name in before));
+  return { loaded: true, added, file };
+}
 
 const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000];
 const MAX_ATTEMPTS = 4;
@@ -556,6 +585,14 @@ export async function main(argv = [], deps = {}) {
   const log = deps.log ?? ((line) => console.log(line));
   const logError = deps.logError ?? ((line) => console.error(line));
 
+  try {
+    loadLocalEnv();
+  } catch (error) {
+    // Never echo the parser's message: a malformed line may quote a key.
+    logError(`error: cannot load ${LOCAL_ENV_FILE} (${error?.code ?? "invalid file"})`);
+    return 2;
+  }
+
   let args;
   try {
     args = parseArgs(argv);
@@ -597,10 +634,15 @@ export async function main(argv = [], deps = {}) {
 
   const missing = missingConnectionEnv(models);
   if (missing.length > 0) {
+    const problem = missing
+      .map((name) =>
+        name === API_KEY_FILE_ENV
+          ? `${name} must point to an existing file`
+          : `${name} must be set`,
+      )
+      .join(" and ");
     logError(
-      `error: ${missing.join(" and ")} must be set to run ${models
-        .map(({ key }) => key)
-        .join(", ")}. See README.md.`,
+      `error: cannot run ${models.map(({ key }) => key).join(", ")}: ${problem}. See README.md.`,
     );
     return 2;
   }

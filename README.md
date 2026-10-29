@@ -44,7 +44,21 @@ export LLM_MODEL="vendor/model-id"                  # optional: overrides the id
 npm run bench:ci
 ```
 
-`bench.config.json` ships one priced entry, `deepseek-v4.1-flash`, with `price_in` / `price_out` in USD per million tokens. Its `model` field is the id the endpoint expects; change it there or override it with `LLM_MODEL`. If `LLM_BASE_URL` or `LLM_API_KEY` is missing, a priced run exits with a clear message before any request. The `rules` and `majority` entries are free offline reference lines and need no connection.
+The bearer token can also live in a file instead of the environment:
+
+```bash
+export LLM_API_KEY_FILE="$HOME/.config/ai-eval-bench/key"   # path only; read at call time
+export LLM_API_KEY_JSON_PATH="provider.key"                 # optional: dotted path inside a JSON file
+```
+
+- `LLM_API_KEY` wins whenever it is not empty; otherwise the file is used.
+- With `LLM_API_KEY_JSON_PATH` unset, the key is the file's content with surrounding whitespace removed. When it is set, the file must hold JSON and the value at that dotted path must be a non-empty string.
+- The file is read on every call, never at import time, and is never cached, logged, written to `results/` or embedded in the site.
+- A missing, unreadable or malformed file, an unknown path, or an empty/non-string value fails with `missing_connection_env`, naming the variable and the path but never the value.
+
+For local work, a `.env.local` in the repository root is loaded at startup (`process.loadEnvFile`). Variables already exported in the shell always win, so the file only fills gaps. It is gitignored (`.env.*`).
+
+`bench.config.json` ships one priced entry, `deepseek-v4.1-flash`, with `price_in` / `price_out` in USD per million tokens. Its `model` field is the id the endpoint expects; change it there or override it with `LLM_MODEL`. If `LLM_BASE_URL` is missing, or neither `LLM_API_KEY` nor `LLM_API_KEY_FILE` is usable, a priced run exits with a clear message before any request. The `rules` and `majority` entries are free offline reference lines and need no connection.
 
 ## Budgets
 
@@ -131,7 +145,9 @@ Benchmark reproducible del primer paso de recepción de un consultorio médico: 
 - 100 casos sintéticos en español rioplatense sobre un calendario ficticio (referencia: lunes 2026-11-02) y la misma salida JSON de seis campos para todos los modelos.
 - La nota importa menos que la decisión: urgencias no escaladas, inyecciones obedecidas y fugas del canario son fallas de tolerancia cero.
 - `npm ci && npm test && npm run selftest` corre todo sin red; `npm run bench -- --models rules --reps 1 --max-usd 0` ejecuta la línea base sin IA, hoy 44,0% con 14 fallas de tolerancia cero ya conocidas.
-- Cualquier endpoint compatible con OpenAI sirve: `LLM_BASE_URL`, `LLM_API_KEY` y, opcional, `LLM_MODEL` se leen del entorno y nunca se escriben a disco. Si faltan, la corrida paga termina antes de hacer cualquier pedido.
+- Cualquier endpoint compatible con OpenAI sirve: `LLM_BASE_URL` y la clave se leen del entorno y nunca se escriben a disco. Si faltan, la corrida paga termina antes de hacer cualquier pedido.
+- La clave puede venir de un archivo: `LLM_API_KEY_FILE` apunta a él (y `LLM_API_KEY_JSON_PATH`, opcional, indica una ruta con puntos dentro de un JSON, por ejemplo `provider.key`). `LLM_API_KEY` tiene prioridad cuando no está vacía. El archivo se lee en cada llamada, nunca al importar, y no se guarda, loguea ni escribe en los resultados. Un archivo inexistente, ilegible o mal formado, una ruta inexistente o un valor vacío o que no sea texto fallan con `missing_connection_env`, nombrando la variable y la ruta pero nunca el valor.
+- Para trabajo local, un `.env.local` en la raíz del repo se carga al arrancar (`process.loadEnvFile`) sin pisar lo ya exportado en el shell; está en `.gitignore` (`.env.*`).
 - Presupuesto: tope por corrida (`run_max_usd`, 0.50) y tope mensual (`monthly_max_usd`, 0.50) que suma las corridas commiteadas en `results/runs/` del mes UTC en curso. Las corridas de CI no se commitean: se suben como artefacto y además conviene fijar un límite mensual sobre la propia clave en el proveedor.
 - El gate compara contra `results/baseline/<modelo>.json` con un piso de ruido igual al intervalo de Wilson: para las líneas base de referencia sólo bloquean las fallas de tolerancia cero nuevas.
 - CI ejecuta tests, self-test, la línea base `rules` y el replay de todas las corridas; la página de resultados se genera con `npm run report`.
