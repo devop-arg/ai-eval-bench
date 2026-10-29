@@ -1,0 +1,9 @@
+{
+  "models": {
+    "deepseek-v4.1-flash": { "provider": "openai-compat", "model": "deepseek/deepseek-v4.1-flash", "price_in": 0.045, "price_out": 0.50, "ci": true, "note": "Model id as expected by the endpoint; prices in USD per million tokens." },
+    "rules":    { "provider": "baseline", "kind": "rules" },
+    "majority": { "provider": "baseline", "kind": "majority" }
+  },
+  "thresholds": { "max_drop_pp": 3 },
+  "budgets": { "run_max_usd": 0.50, "monthly_max_usd": 0.50 }
+}

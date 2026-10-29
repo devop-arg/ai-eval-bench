@@ -1,0 +1,20 @@
+{
+  "name": "ai-eval-bench",
+  "version": "0.1.0",
+  "description": "Reproducible benchmark for the front-desk intake step of a medical clinic: structured action, abstention, escalation, medical-advice refusal and prompt-injection resistance.",
+  "private": false,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\"",
+    "bench": "node src/run.js",
+    "bench:ci": "node src/run.js --models ci --reps 1 --max-usd 0.50",
+    "bench:full": "node src/run.js --models all --reps 3 --max-usd 0.50",
+    "check": "node src/check.js",
+    "report": "node src/report.js",
+    "selftest": "node src/selftest.js"
+  }
+}
