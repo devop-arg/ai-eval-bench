@@ -1,0 +1,60 @@
+name: ci
+
+# Every push and pull request, no secrets, no network to providers.
+# Runs the unit tests, the harness self-test, a live `rules` (offline baseline)
+# run gated against its baseline, and replays every committed run.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests, self-test and gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Harness self-test (oracle 100%, null 0%)
+        run: npm run selftest
+
+      # find the run directory reliably: --out points at a temp dir, so the only
+      # thing under it is the run this step just produced.
+      - name: Live rules run and gate against its baseline
+        run: |
+          set -euo pipefail
+          OUT="${RUNNER_TEMP}/rules-run"
+          rm -rf "$OUT"
+          node src/run.js --models rules --reps 1 --max-usd 0 --out "$OUT"
+          RUN_DIR="$(find "$OUT/rules" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1)"
+          if [ -z "$RUN_DIR" ]; then
+            echo "::error::run.js did not create a run directory under $OUT/rules"
+            exit 1
+          fi
+          echo "gate target: $RUN_DIR"
+          node src/check.js --run "$RUN_DIR" --baseline results/baseline/rules.json
+
+      # Replays every committed run with the current grader. Exit 3 from the
+      # replay ("prompt changed") is a notice, not a failure; see src/replay-all.js.
+      - name: Replay committed runs and gate them
+        run: node src/replay-all.js

@@ -1,0 +1,149 @@
+name: live
+
+# Manual, paid run against an OpenAI-compatible endpoint.
+#
+# The monthly ledger (budgets.monthly_max_usd in bench.config.json) only counts
+# committed runs under results/runs/, so a run started here never feeds it: the
+# run directories are uploaded as artifacts instead. As a second backstop, set a
+# monthly spending limit on the API key itself at the provider.
+#
+# Needs the repository secrets LLM_BASE_URL and LLM_API_KEY. They are read from
+# the environment only, never echoed and never written to disk. When either is
+# missing the job prints a notice and skips instead of failing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: "Model keys, comma-separated, or `ci` / `all`"
+        required: false
+        default: "ci"
+      reps:
+        description: "Repetitions per case"
+        required: false
+        default: "1"
+      max_usd:
+        description: "Hard budget in USD for this run"
+        required: false
+        default: "0.50"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live:
+    name: live run and gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      # Providers read these from the environment; nothing else uses them.
+      LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+
+    steps:
+      - name: Check that the connection secrets are present
+        id: guard
+        run: |
+          set -euo pipefail
+          MODELS="${{ inputs.models }}"
+          REPS="${{ inputs.reps }}"
+          BUDGET="${{ inputs.max_usd }}"
+          if [ -z "$MODELS" ]; then MODELS="ci"; fi
+          if [ -z "$REPS" ]; then REPS="1"; fi
+          if [ -z "$BUDGET" ]; then BUDGET="0.50"; fi
+
+          echo "models=$MODELS" >> "$GITHUB_OUTPUT"
+          echo "reps=$REPS" >> "$GITHUB_OUTPUT"
+          echo "budget=$BUDGET" >> "$GITHUB_OUTPUT"
+
+          # The offline baselines need no connection at all.
+          case "$MODELS" in
+            rules|majority) needs_connection=false ;;
+            *) needs_connection=true ;;
+          esac
+
+          missing=""
+          if [ "$needs_connection" = true ] && [ -z "${LLM_BASE_URL:-}" ]; then
+            missing="$missing LLM_BASE_URL"
+          fi
+          if [ "$needs_connection" = true ] && [ -z "${LLM_API_KEY:-}" ]; then
+            missing="$missing LLM_API_KEY"
+          fi
+
+          if [ -n "$missing" ]; then
+            echo "::notice::missing secret(s):$missing. Skipping the live run; set them in the repository secrets."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.guard.outputs.run == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.guard.outputs.run == 'true'
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.guard.outputs.run == 'true'
+        run: npm ci
+
+      # --out keeps the run out of results/runs/, so it never reaches the
+      # monthly ledger; the artifact below is the record.
+      - name: Live run
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          MODELS="${{ steps.guard.outputs.models }}"
+          REPS="${{ steps.guard.outputs.reps }}"
+          BUDGET="${{ steps.guard.outputs.budget }}"
+
+          OUT="${RUNNER_TEMP}/live-runs"
+          rm -rf "$OUT"
+          echo "models=$MODELS reps=$REPS budget=\$$BUDGET"
+          node src/run.js --models "$MODELS" --reps "$REPS" --max-usd "$BUDGET" --out "$OUT"
+
+      - name: Gate each produced run against its baseline
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          OUT="${RUNNER_TEMP}/live-runs"
+
+          found=0
+          status=0
+          for run_dir in "$OUT"/*/*/; do
+            found=$((found + 1))
+            dir="${run_dir%/}"
+            key="$(basename "$(dirname "$dir")")"
+            baseline="results/baseline/${key}.json"
+            if [ ! -f "$baseline" ]; then
+              echo "::notice::no baseline for ${key}; gate skipped for ${dir}"
+              continue
+            fi
+            if ! node src/check.js --run "$dir" --baseline "$baseline"; then
+              status=1
+            fi
+          done
+
+          if [ "$found" -eq 0 ]; then
+            echo "::error::the live run produced no run directories under $OUT"
+            exit 1
+          fi
+          exit "$status"
+
+      - name: Upload run directories
+        if: always() && steps.guard.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-runs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/live-runs
+          if-no-files-found: warn
+          retention-days: 14
